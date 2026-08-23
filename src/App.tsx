@@ -12,100 +12,63 @@ type Clip = {
   title: string;
   duration: string;
   ago: string;
+  path?: string;
 };
 
-const initialClips: Clip[] = [
-  {
-    id: 1,
-    game: "Minecraft",
-    title: "Insane clutch",
-    duration: "00:42",
-    ago: "2 min ago",
-  },
-  {
-    id: 2,
-    game: "Vortex",
-    title: "Clean play",
-    duration: "00:31",
-    ago: "18 min ago",
-  },
-  {
-    id: 3,
-    game: "Roblox",
-    title: "That was close",
-    duration: "00:57",
-    ago: "1 hr ago",
-  },
-];
+const initialClips: Clip[] = [];
 
 export default function App() {
   const [capturing, setCapturing] = useState(false);
-  const [clips, setClips] = useState<Clip[]>(initialClips);
+  const [clips, setClips] = useState<Clip[]>(
+    initialClips
+  );
   const [status, setStatus] = useState("Ready");
-  const [replayLength, setReplayLength] = useState(30);
+  const [replayLength, setReplayLength] =
+    useState(30);
 
-  /*
-   * Start capture.
-   */
   async function startCapture() {
     try {
       setStatus("Starting capture...");
 
-      const outputDir =
-        "%USERPROFILE%\\Videos\\KoosReplay";
-
-      await invoke<string>("start_capture", {
-        outputDir,
-      });
+      await invoke<string>(
+        "start_capture",
+        {
+          outputDir:
+            "Videos\\KoosReplay",
+        }
+      );
 
       setCapturing(true);
       setStatus("Capturing");
     } catch (error) {
-      console.error(
-        "Failed to start capture:",
-        error
-      );
+      console.error(error);
 
       setCapturing(false);
       setStatus("Capture unavailable");
 
       alert(
-        `KoosReplay could not start capture.\n\n${String(
-          error
-        )}`
+        `Could not start capture.\n\n${String(error)}`
       );
     }
   }
 
-  /*
-   * Stop capture.
-   */
   async function stopCapture() {
     try {
-      await invoke("stop_capture");
+      await invoke(
+        "stop_capture"
+      );
 
       setCapturing(false);
       setStatus("Ready");
     } catch (error) {
-      console.error(
-        "Failed to stop capture:",
-        error
-      );
+      console.error(error);
 
       alert(
-        `KoosReplay could not stop capture.\n\n${String(
-          error
-        )}`
+        `Could not stop capture.\n\n${String(error)}`
       );
     }
   }
 
-  /*
-   * Save the replay.
-   *
-   * The Rust save_replay command will become the
-   * actual FFmpeg replay-buffer implementation.
-   */
   async function saveReplay() {
     if (!capturing) {
       await startCapture();
@@ -115,67 +78,64 @@ export default function App() {
     try {
       setStatus("Saving replay...");
 
-      const result = await invoke<string>(
-        "save_replay",
-        {
-          seconds: replayLength,
-        }
-      );
+      const path =
+        await invoke<string>(
+          "save_replay",
+          {
+            seconds:
+              replayLength,
+          }
+        );
 
       console.log(
         "Replay saved:",
-        result
+        path
       );
 
       const newClip: Clip = {
         id: Date.now(),
-        game: "Current Game",
+        game: "Desktop",
         title: "New replay",
-        duration: `00:${String(
-          replayLength
-        ).padStart(2, "0")}`,
+        duration:
+          `${replayLength}s`,
         ago: "Just now",
+        path,
       };
 
-      setClips((current) => [
-        newClip,
-        ...current,
-      ]);
+      setClips(
+        current => [
+          newClip,
+          ...current,
+        ]
+      );
 
       setStatus("Replay saved");
     } catch (error) {
-      console.error(
-        "Failed to save replay:",
-        error
-      );
+      console.error(error);
 
       setStatus("Capturing");
 
       alert(
-        `Replay could not be saved yet.\n\n${String(
-          error
-        )}`
+        `Replay could not be saved.\n\n${String(error)}`
       );
     }
   }
 
   /*
-   * Register global F9.
-   *
-   * Unlike a normal browser keyboard listener,
-   * this works while another application is focused.
+   * Global F9.
    */
   useEffect(() => {
     let active = true;
 
-    async function setupGlobalHotkey() {
+    async function setupHotkey() {
       try {
         await register(
           "F9",
-          (event) => {
+          event => {
             if (
               active &&
-              event.state === "Pressed"
+              event.state ===
+                "Pressed"
             ) {
               void saveReplay();
             }
@@ -183,37 +143,40 @@ export default function App() {
         );
 
         console.log(
-          "KoosReplay: global F9 registered"
+          "Global F9 registered"
         );
       } catch (error) {
         console.error(
-          "Could not register global F9:",
+          "Failed to register F9:",
           error
         );
       }
     }
 
-    void setupGlobalHotkey();
+    void setupHotkey();
 
     return () => {
       active = false;
 
-      void unregister("F9").catch(
-        (error) => {
-          console.error(
-            "Could not unregister F9:",
-            error
-          );
-        }
-      );
+      void unregister(
+        "F9"
+      ).catch(error => {
+        console.error(
+          "Failed to unregister F9:",
+          error
+        );
+      });
     };
-  }, [capturing, replayLength]);
+  }, [
+    capturing,
+    replayLength,
+  ]);
 
   return (
     <div className="app">
-      {/* SIDEBAR */}
 
       <aside className="sidebar">
+
         <div className="brand">
           <div className="brand-icon">
             K
@@ -242,15 +205,19 @@ export default function App() {
         </nav>
 
         <div className="capture-status">
+
           <div
             className="status-dot"
             style={{
-              background: capturing
-                ? "#65d992"
-                : "#777780",
-              boxShadow: capturing
-                ? "0 0 12px #65d992"
-                : "none",
+              background:
+                capturing
+                  ? "#65d992"
+                  : "#777780",
+
+              boxShadow:
+                capturing
+                  ? "0 0 12px #65d992"
+                  : "none",
             }}
           />
 
@@ -263,13 +230,15 @@ export default function App() {
               {status}
             </small>
           </div>
+
         </div>
+
       </aside>
 
-      {/* MAIN */}
-
       <main>
+
         <header>
+
           <div>
             <p className="eyebrow">
               CAPTURE CENTER
@@ -283,7 +252,7 @@ export default function App() {
 
             <p className="subtitle">
               {capturing
-                ? "KoosReplay is continuously capturing your gameplay."
+                ? "KoosReplay is continuously capturing your desktop."
                 : "KoosReplay is ready to capture your gameplay."}
             </p>
           </div>
@@ -291,12 +260,13 @@ export default function App() {
           <button className="settings-button">
             ⚙
           </button>
+
         </header>
 
-        {/* CAPTURE CARD */}
-
         <section className="capture-card">
+
           <div>
+
             <p className="eyebrow">
               SMART CAPTURE
             </p>
@@ -318,9 +288,11 @@ export default function App() {
                 Adaptive Capture ON
               </span>
             </div>
+
           </div>
 
           <div>
+
             <button
               className="replay-button"
               onClick={() =>
@@ -352,28 +324,34 @@ export default function App() {
                   marginTop: "8px",
                   padding: "8px",
                   borderRadius: "9px",
-                  background: "#17171b",
-                  color: "#9999a2",
+                  background:
+                    "#17171b",
+                  color:
+                    "#9999a2",
                 }}
               >
                 Stop capture
               </button>
             )}
-          </div>
-        </section>
 
-        {/* REPLAY LENGTH */}
+          </div>
+
+        </section>
 
         <section
           style={{
             marginTop: "22px",
             padding: "20px",
-            border: "1px solid #1d1d21",
+            border:
+              "1px solid #1d1d21",
             borderRadius: "16px",
-            background: "#0f0f12",
+            background:
+              "#0f0f12",
           }}
         >
+
           <div className="section-header">
+
             <h2>
               Replay length
             </h2>
@@ -381,6 +359,7 @@ export default function App() {
             <strong>
               {replayLength}s
             </strong>
+
           </div>
 
           <div
@@ -389,8 +368,9 @@ export default function App() {
               gap: "8px",
             }}
           >
+
             {[30, 60, 120].map(
-              (seconds) => (
+              seconds => (
                 <button
                   key={seconds}
                   onClick={() =>
@@ -401,12 +381,16 @@ export default function App() {
                   style={{
                     padding:
                       "9px 15px",
-                    borderRadius: "9px",
+
+                    borderRadius:
+                      "9px",
+
                     background:
                       replayLength ===
                       seconds
                         ? "#f4f4f5"
                         : "#18181c",
+
                     color:
                       replayLength ===
                       seconds
@@ -418,13 +402,15 @@ export default function App() {
                 </button>
               )
             )}
+
           </div>
+
         </section>
 
-        {/* RECENT CLIPS */}
-
         <section className="clips-section">
+
           <div className="section-header">
+
             <h2>
               Recent clips
             </h2>
@@ -432,50 +418,81 @@ export default function App() {
             <button>
               View all →
             </button>
+
           </div>
 
-          <div className="clips">
-            {clips.map((clip) => (
-              <article
-                className="clip"
-                key={clip.id}
-              >
-                <div className="thumbnail">
-                  <span>
-                    ▶
-                  </span>
+          {clips.length === 0 ? (
 
-                  <small>
-                    {clip.duration}
-                  </small>
-                </div>
+            <div
+              style={{
+                padding: "45px",
+                textAlign: "center",
+                color: "#777780",
+              }}
+            >
+              No clips yet.
+              <br />
+              Press <strong>F9</strong> after
+              capturing something.
+            </div>
 
-                <div className="clip-info">
-                  <strong>
-                    {clip.title}
-                  </strong>
+          ) : (
 
-                  <span>
-                    {clip.game}
-                  </span>
+            <div className="clips">
 
-                  <small>
-                    {clip.ago}
-                  </small>
-                </div>
+              {clips.map(
+                clip => (
 
-                <button className="more-button">
-                  •••
-                </button>
-              </article>
-            ))}
-          </div>
+                  <article
+                    className="clip"
+                    key={clip.id}
+                  >
+
+                    <div className="thumbnail">
+                      <span>
+                        ▶
+                      </span>
+
+                      <small>
+                        {clip.duration}
+                      </small>
+                    </div>
+
+                    <div className="clip-info">
+
+                      <strong>
+                        {clip.title}
+                      </strong>
+
+                      <span>
+                        {clip.game}
+                      </span>
+
+                      <small>
+                        {clip.ago}
+                      </small>
+
+                    </div>
+
+                    <button className="more-button">
+                      •••
+                    </button>
+
+                  </article>
+
+                )
+              )}
+
+            </div>
+
+          )}
+
         </section>
 
-        {/* PERFORMANCE */}
-
         <section className="performance-card">
+
           <div>
+
             <p className="eyebrow">
               SYSTEM
             </p>
@@ -486,13 +503,16 @@ export default function App() {
 
             <p>
               Adaptive Capture will
-              automatically reduce recording
-              load if your game needs
-              additional resources.
+              automatically reduce
+              recording load if your
+              game needs additional
+              resources.
             </p>
+
           </div>
 
           <div className="performance-status">
+
             <strong>
               {capturing
                 ? "ACTIVE"
@@ -502,9 +522,13 @@ export default function App() {
             <span>
               Recorder load
             </span>
+
           </div>
+
         </section>
+
       </main>
+
     </div>
   );
 }
