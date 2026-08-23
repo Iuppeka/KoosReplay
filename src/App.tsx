@@ -1,18 +1,175 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import {
+  register,
+  unregister,
+} from "@tauri-apps/plugin-global-shortcut";
+
 import "./styles.css";
 
 type Page = "home" | "clips" | "settings";
 
+type Clip = {
+  id: number;
+  title: string;
+  duration: number;
+  path: string;
+  created: string;
+};
+
+const REPLAY_DIR = "Videos\\KoosReplay";
+
 export default function App() {
   const [page, setPage] = useState<Page>("home");
-  const [capturing, setCapturing] = useState(false);
-  const [replayLength, setReplayLength] = useState(30);
-  const [quality, setQuality] = useState("Auto");
-  const [hotkey, setHotkey] = useState("F9");
 
-  function toggleCapture() {
-    setCapturing((value) => !value);
+  const [capturing, setCapturing] =
+    useState(false);
+
+  const [saving, setSaving] =
+    useState(false);
+
+  const [replayLength, setReplayLength] =
+    useState(30);
+
+  const [hotkey, setHotkey] =
+    useState("F9");
+
+  const [quality, setQuality] =
+    useState("Auto");
+
+  const [status, setStatus] =
+    useState("Ready");
+
+  const [clips, setClips] =
+    useState<Clip[]>([]);
+
+  async function startCapture() {
+    try {
+      setStatus("Starting capture...");
+
+      await invoke(
+        "start_capture",
+        {
+          outputDir: REPLAY_DIR,
+        }
+      );
+
+      setCapturing(true);
+      setStatus("Capturing");
+    } catch (error) {
+      console.error(error);
+
+      setStatus("Capture failed");
+
+      alert(
+        `Could not start KoosReplay.\n\n${String(error)}`
+      );
+    }
   }
+
+  async function stopCapture() {
+    try {
+      await invoke("stop_capture");
+
+      setCapturing(false);
+      setStatus("Ready");
+    } catch (error) {
+      console.error(error);
+
+      alert(
+        `Could not stop capture.\n\n${String(error)}`
+      );
+    }
+  }
+
+  async function saveReplay() {
+    if (!capturing) {
+      await startCapture();
+      return;
+    }
+
+    if (saving) {
+      return;
+    }
+
+    try {
+      setSaving(true);
+      setStatus("Saving replay...");
+
+      const path =
+        await invoke<string>(
+          "save_replay",
+          {
+            seconds: replayLength,
+          }
+        );
+
+      const clip: Clip = {
+        id: Date.now(),
+        title: "New Replay",
+        duration: replayLength,
+        path,
+        created: "Just now",
+      };
+
+      setClips((current) => [
+        clip,
+        ...current,
+      ]);
+
+      setStatus("Replay saved");
+    } catch (error) {
+      console.error(error);
+
+      setStatus("Capturing");
+
+      alert(
+        `Could not save replay.\n\n${String(error)}`
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  useEffect(() => {
+    let alive = true;
+
+    async function setupHotkey() {
+      try {
+        await register(
+          hotkey,
+          (event) => {
+            if (
+              alive &&
+              event.state === "Pressed"
+            ) {
+              void saveReplay();
+            }
+          }
+        );
+      } catch (error) {
+        console.error(
+          "Hotkey registration failed:",
+          error
+        );
+      }
+    }
+
+    void setupHotkey();
+
+    return () => {
+      alive = false;
+
+      void unregister(
+        hotkey
+      ).catch(() => {});
+    };
+  }, [
+    hotkey,
+    capturing,
+    replayLength,
+    saving,
+  ]);
 
   return (
     <div className="app">
@@ -20,17 +177,26 @@ export default function App() {
       <aside className="sidebar">
 
         <div className="brand">
-          <div className="brand-icon">K</div>
-          <span>KoosReplay</span>
+          <div className="brand-icon">
+            K
+          </div>
+
+          <span>
+            KoosReplay
+          </span>
         </div>
 
         <nav>
 
           <button
             className={`nav-button ${
-              page === "home" ? "active" : ""
+              page === "home"
+                ? "active"
+                : ""
             }`}
-            onClick={() => setPage("home")}
+            onClick={() =>
+              setPage("home")
+            }
           >
             <span>⌂</span>
             Home
@@ -38,9 +204,13 @@ export default function App() {
 
           <button
             className={`nav-button ${
-              page === "clips" ? "active" : ""
+              page === "clips"
+                ? "active"
+                : ""
             }`}
-            onClick={() => setPage("clips")}
+            onClick={() =>
+              setPage("clips")
+            }
           >
             <span>▶</span>
             My Clips
@@ -48,9 +218,13 @@ export default function App() {
 
           <button
             className={`nav-button ${
-              page === "settings" ? "active" : ""
+              page === "settings"
+                ? "active"
+                : ""
             }`}
-            onClick={() => setPage("settings")}
+            onClick={() =>
+              setPage("settings")
+            }
           >
             <span>⚙</span>
             Settings
@@ -63,12 +237,15 @@ export default function App() {
           <div
             className="status-dot"
             style={{
-              background: capturing
-                ? "#65d992"
-                : "#777780",
-              boxShadow: capturing
-                ? "0 0 12px #65d992"
-                : "none",
+              background:
+                capturing
+                  ? "#65d992"
+                  : "#777780",
+
+              boxShadow:
+                capturing
+                  ? "0 0 12px #65d992"
+                  : "none",
             }}
           />
 
@@ -78,9 +255,7 @@ export default function App() {
             </strong>
 
             <small>
-              {capturing
-                ? "Capturing"
-                : "Ready"}
+              {status}
             </small>
           </div>
 
@@ -107,8 +282,8 @@ export default function App() {
 
                 <p className="subtitle">
                   {capturing
-                    ? "KoosReplay is ready to save your latest moments."
-                    : "KoosReplay is ready to capture your gameplay."}
+                    ? "KoosReplay is continuously capturing your desktop."
+                    : "Start capture and save your last moments with F9."}
                 </p>
               </div>
 
@@ -136,7 +311,7 @@ export default function App() {
                 </h2>
 
                 <p className="capture-description">
-                  Automatic performance optimization
+                  60 FPS · Adaptive capture
                 </p>
 
                 <div className="chips">
@@ -145,7 +320,7 @@ export default function App() {
                   </span>
 
                   <span>
-                    Adaptive Capture ON
+                    Adaptive Capture
                   </span>
                 </div>
 
@@ -155,7 +330,13 @@ export default function App() {
 
                 <button
                   className="replay-button"
-                  onClick={toggleCapture}
+                  onClick={() => {
+                    if (capturing) {
+                      void stopCapture();
+                    } else {
+                      void startCapture();
+                    }
+                  }}
                 >
                   <strong>
                     {hotkey}
@@ -168,7 +349,7 @@ export default function App() {
                   </span>
 
                   <small>
-                    Replay: {replayLength}s
+                    Last {replayLength}s
                   </small>
                 </button>
 
@@ -179,7 +360,9 @@ export default function App() {
             <section className="settings-preview">
 
               <div className="section-header">
-                <h2>Replay length</h2>
+                <h2>
+                  Replay length
+                </h2>
 
                 <strong>
                   {replayLength}s
@@ -193,12 +376,15 @@ export default function App() {
                     <button
                       key={seconds}
                       className={
-                        replayLength === seconds
+                        replayLength ===
+                        seconds
                           ? "option active-option"
                           : "option"
                       }
                       onClick={() =>
-                        setReplayLength(seconds)
+                        setReplayLength(
+                          seconds
+                        )
                       }
                     >
                       {seconds}s
@@ -207,6 +393,80 @@ export default function App() {
                 )}
 
               </div>
+
+            </section>
+
+            <section className="clips-section">
+
+              <div className="section-header">
+
+                <h2>
+                  Recent clips
+                </h2>
+
+                <button
+                  onClick={() =>
+                    setPage("clips")
+                  }
+                >
+                  View all →
+                </button>
+
+              </div>
+
+              {clips.length === 0 ? (
+                <div className="empty-state">
+                  <div className="empty-icon">
+                    ▶
+                  </div>
+
+                  <h2>
+                    No clips yet
+                  </h2>
+
+                  <p>
+                    Start capturing and
+                    press {hotkey} to save
+                    your first replay.
+                  </p>
+                </div>
+              ) : (
+                <div className="clips">
+
+                  {clips.map((clip) => (
+                    <article
+                      className="clip"
+                      key={clip.id}
+                    >
+                      <div className="thumbnail">
+                        <span>
+                          ▶
+                        </span>
+
+                        <small>
+                          {clip.duration}s
+                        </small>
+                      </div>
+
+                      <div className="clip-info">
+                        <strong>
+                          {clip.title}
+                        </strong>
+
+                        <span>
+                          Desktop Capture
+                        </span>
+
+                        <small>
+                          {clip.created}
+                        </small>
+                      </div>
+
+                    </article>
+                  ))}
+
+                </div>
+              )}
 
             </section>
           </>
@@ -225,24 +485,63 @@ export default function App() {
                 </h1>
 
                 <p className="subtitle">
-                  Your saved KoosReplay moments.
+                  Your saved KoosReplay
+                  moments.
                 </p>
               </div>
             </header>
 
-            <div className="empty-state">
-              <div className="empty-icon">
-                ▶
+            {clips.length === 0 ? (
+              <div className="empty-state">
+                <div className="empty-icon">
+                  ▶
+                </div>
+
+                <h2>
+                  No clips yet
+                </h2>
+
+                <p>
+                  Saved replays will
+                  appear here.
+                </p>
               </div>
+            ) : (
+              <div className="clips">
 
-              <h2>
-                No clips yet
-              </h2>
+                {clips.map((clip) => (
+                  <article
+                    className="clip"
+                    key={clip.id}
+                  >
+                    <div className="thumbnail">
+                      <span>
+                        ▶
+                      </span>
 
-              <p>
-                Your saved replays will appear here.
-              </p>
-            </div>
+                      <small>
+                        {clip.duration}s
+                      </small>
+                    </div>
+
+                    <div className="clip-info">
+                      <strong>
+                        {clip.title}
+                      </strong>
+
+                      <span>
+                        {clip.path}
+                      </span>
+
+                      <small>
+                        {clip.created}
+                      </small>
+                    </div>
+                  </article>
+                ))}
+
+              </div>
+            )}
           </>
         )}
 
@@ -274,8 +573,8 @@ export default function App() {
                   </strong>
 
                   <p>
-                    How much footage is saved
-                    when you clip.
+                    How much footage is
+                    saved when you clip.
                   </p>
                 </div>
 
@@ -283,19 +582,21 @@ export default function App() {
                   value={replayLength}
                   onChange={(event) =>
                     setReplayLength(
-                      Number(event.target.value)
+                      Number(
+                        event.target.value
+                      )
                     )
                   }
                 >
-                  <option value={30}>
+                  <option value="30">
                     30 seconds
                   </option>
 
-                  <option value={60}>
+                  <option value="60">
                     60 seconds
                   </option>
 
-                  <option value={120}>
+                  <option value="120">
                     120 seconds
                   </option>
                 </select>
@@ -310,8 +611,8 @@ export default function App() {
                   </strong>
 
                   <p>
-                    Keyboard shortcut used to
-                    save a replay.
+                    Keyboard shortcut used
+                    to save a replay.
                   </p>
                 </div>
 
@@ -334,8 +635,8 @@ export default function App() {
                   </strong>
 
                   <p>
-                    Automatically select the
-                    best settings for your PC.
+                    Choose how aggressively
+                    KoosReplay uses your PC.
                   </p>
                 </div>
 
@@ -374,38 +675,18 @@ export default function App() {
 
                 <div>
                   <strong>
-                    Start with Windows
+                    Save location
                   </strong>
 
                   <p>
-                    Launch KoosReplay automatically.
+                    Default:
+                    Videos\KoosReplay
                   </p>
                 </div>
 
-                <input
-                  type="checkbox"
-                  defaultChecked
-                />
-
-              </div>
-
-              <div className="setting">
-
-                <div>
-                  <strong>
-                    Notifications
-                  </strong>
-
-                  <p>
-                    Show a notification when a
-                    replay is saved.
-                  </p>
-                </div>
-
-                <input
-                  type="checkbox"
-                  defaultChecked
-                />
+                <button className="option">
+                  Change
+                </button>
 
               </div>
 
