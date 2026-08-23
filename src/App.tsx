@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import {
+  register,
+  unregister,
+} from "@tauri-apps/plugin-global-shortcut";
 import "./styles.css";
 
 type Clip = {
@@ -41,19 +45,12 @@ export default function App() {
   const [replayLength, setReplayLength] = useState(30);
 
   /*
-   * Start the capture backend.
+   * Start capture.
    */
   async function startCapture() {
     try {
       setStatus("Starting capture...");
 
-      /*
-       * This will eventually point to:
-       *
-       * %USERPROFILE%\Videos\KoosReplay
-       *
-       * For now we use the Windows environment variable.
-       */
       const outputDir =
         "%USERPROFILE%\\Videos\\KoosReplay";
 
@@ -64,19 +61,24 @@ export default function App() {
       setCapturing(true);
       setStatus("Capturing");
     } catch (error) {
-      console.error(error);
+      console.error(
+        "Failed to start capture:",
+        error
+      );
 
       setCapturing(false);
       setStatus("Capture unavailable");
 
       alert(
-        `KoosReplay could not start capture.\n\n${String(error)}`
+        `KoosReplay could not start capture.\n\n${String(
+          error
+        )}`
       );
     }
   }
 
   /*
-   * Stop the capture backend.
+   * Stop capture.
    */
   async function stopCapture() {
     try {
@@ -85,19 +87,24 @@ export default function App() {
       setCapturing(false);
       setStatus("Ready");
     } catch (error) {
-      console.error(error);
+      console.error(
+        "Failed to stop capture:",
+        error
+      );
 
       alert(
-        `KoosReplay could not stop capture.\n\n${String(error)}`
+        `KoosReplay could not stop capture.\n\n${String(
+          error
+        )}`
       );
     }
   }
 
   /*
-   * Save replay.
+   * Save the replay.
    *
-   * This is the command we'll connect to the real
-   * rolling replay buffer in the next backend update.
+   * The Rust save_replay command will become the
+   * actual FFmpeg replay-buffer implementation.
    */
   async function saveReplay() {
     if (!capturing) {
@@ -108,19 +115,25 @@ export default function App() {
     try {
       setStatus("Saving replay...");
 
-      /*
-       * The actual save_replay Rust command will be
-       * added when we implement the FFmpeg replay buffer.
-       */
-      await invoke("save_replay", {
-        seconds: replayLength,
-      });
+      const result = await invoke<string>(
+        "save_replay",
+        {
+          seconds: replayLength,
+        }
+      );
+
+      console.log(
+        "Replay saved:",
+        result
+      );
 
       const newClip: Clip = {
         id: Date.now(),
         game: "Current Game",
         title: "New replay",
-        duration: `00:${String(replayLength).padStart(2, "0")}`,
+        duration: `00:${String(
+          replayLength
+        ).padStart(2, "0")}`,
         ago: "Just now",
       };
 
@@ -131,42 +144,70 @@ export default function App() {
 
       setStatus("Replay saved");
     } catch (error) {
-      console.error(error);
+      console.error(
+        "Failed to save replay:",
+        error
+      );
 
-      setStatus("Ready");
+      setStatus("Capturing");
 
-      /*
-       * Until the Rust save_replay command exists,
-       * this will show the backend error instead of
-       * silently pretending the clip was saved.
-       */
       alert(
-        `Replay could not be saved yet.\n\n${String(error)}`
+        `Replay could not be saved yet.\n\n${String(
+          error
+        )}`
       );
     }
   }
 
   /*
-   * F9 global keyboard shortcut.
+   * Register global F9.
    *
-   * This currently works while the KoosReplay window
-   * has focus. We'll move this to a real Windows
-   * global hotkey later.
+   * Unlike a normal browser keyboard listener,
+   * this works while another application is focused.
    */
   useEffect(() => {
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "F9") {
-        event.preventDefault();
-        void saveReplay();
+    let active = true;
+
+    async function setupGlobalHotkey() {
+      try {
+        await register(
+          "F9",
+          (event) => {
+            if (
+              active &&
+              event.state === "Pressed"
+            ) {
+              void saveReplay();
+            }
+          }
+        );
+
+        console.log(
+          "KoosReplay: global F9 registered"
+        );
+      } catch (error) {
+        console.error(
+          "Could not register global F9:",
+          error
+        );
       }
     }
 
-    window.addEventListener("keydown", handleKeyDown);
+    void setupGlobalHotkey();
 
     return () => {
-      window.removeEventListener("keydown", handleKeyDown);
+      active = false;
+
+      void unregister("F9").catch(
+        (error) => {
+          console.error(
+            "Could not unregister F9:",
+            error
+          );
+        }
+      );
     };
-  });
+  }, [capturing, replayLength]);
 
   return (
     <div className="app">
@@ -174,8 +215,13 @@ export default function App() {
 
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-icon">K</div>
-          <span>KoosReplay</span>
+          <div className="brand-icon">
+            K
+          </div>
+
+          <span>
+            KoosReplay
+          </span>
         </div>
 
         <nav>
@@ -277,7 +323,9 @@ export default function App() {
           <div>
             <button
               className="replay-button"
-              onClick={() => void saveReplay()}
+              onClick={() =>
+                void saveReplay()
+              }
             >
               <strong>
                 F9
@@ -296,7 +344,9 @@ export default function App() {
 
             {capturing && (
               <button
-                onClick={() => void stopCapture()}
+                onClick={() =>
+                  void stopCapture()
+                }
                 style={{
                   width: "100%",
                   marginTop: "8px",
@@ -344,17 +394,22 @@ export default function App() {
                 <button
                   key={seconds}
                   onClick={() =>
-                    setReplayLength(seconds)
+                    setReplayLength(
+                      seconds
+                    )
                   }
                   style={{
-                    padding: "9px 15px",
+                    padding:
+                      "9px 15px",
                     borderRadius: "9px",
                     background:
-                      replayLength === seconds
+                      replayLength ===
+                      seconds
                         ? "#f4f4f5"
                         : "#18181c",
                     color:
-                      replayLength === seconds
+                      replayLength ===
+                      seconds
                         ? "#09090b"
                         : "#9999a2",
                   }}
@@ -430,9 +485,10 @@ export default function App() {
             </h2>
 
             <p>
-              Adaptive Capture will automatically
-              reduce recording load if your game
-              needs additional resources.
+              Adaptive Capture will
+              automatically reduce recording
+              load if your game needs
+              additional resources.
             </p>
           </div>
 
