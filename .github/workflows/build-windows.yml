@@ -16,38 +16,29 @@ jobs:
       contents: write
 
     steps:
-      # Get the KoosReplay source code
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Install Node.js on the GitHub runner
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
 
-      # Install Rust on the GitHub runner
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
 
-      # Install JavaScript dependencies
       - name: Install dependencies
         run: npm install
 
-      # Build KoosReplay
       - name: Build KoosReplay
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          projectPath: .
-          tagName: v0.1.0
-          releaseName: KoosReplay v0.1.0
-          releaseBody: |
-            KoosReplay v0.1.0
+        run: npm run tauri build
 
-            First automated Windows build.
-          releaseDraft: true
-          prerelease: true
+      - name: Upload Windows installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: KoosReplay-Windows
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
