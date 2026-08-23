@@ -13,7 +13,7 @@ jobs:
     runs-on: windows-latest
 
     permissions:
-      contents: write
+      contents: read
 
     steps:
       - name: Checkout repository
@@ -31,6 +31,29 @@ jobs:
 
       - name: Install dependencies
         run: npm install
+
+      - name: Install ImageMagick
+        shell: pwsh
+        run: |
+          choco install imagemagick -y --no-progress
+
+      - name: Generate Windows icon
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "src-tauri/icons"
+
+          magick convert `
+            "src-tauri/icons/koosreplay.svg" `
+            -background none `
+            -define icon:auto-resize=256,128,64,48,32,16 `
+            "src-tauri/icons/icon.ico"
+
+          if (!(Test-Path "src-tauri/icons/icon.ico")) {
+            Write-Error "icon.ico was not generated."
+            exit 1
+          }
+
+          Write-Host "KoosReplay icon generated successfully."
 
       - name: Build KoosReplay
         run: npm run tauri build
