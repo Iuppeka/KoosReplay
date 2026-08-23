@@ -2,36 +2,52 @@ name: Build KoosReplay
 
 on:
   workflow_dispatch:
+
   push:
     branches:
       - main
 
 jobs:
   build-windows:
+    name: Build Windows App
     runs-on: windows-latest
 
     permissions:
       contents: write
 
     steps:
-      - name: Checkout
+      # Get the KoosReplay source code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Install Node.js on the GitHub runner
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
+      # Install Rust on the GitHub runner
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
 
+      # Install JavaScript dependencies
       - name: Install dependencies
         run: npm install
 
+      # Build KoosReplay
       - name: Build KoosReplay
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: .
+          tagName: v0.1.0
+          releaseName: KoosReplay v0.1.0
+          releaseBody: |
+            KoosReplay v0.1.0
+
+            First automated Windows build.
+          releaseDraft: true
+          prerelease: true
