@@ -16,6 +16,7 @@ jobs:
       contents: read
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -37,10 +38,13 @@ jobs:
         run: |
           choco install imagemagick -y --no-progress
 
-      - name: Generate Windows icon
+      - name: Generate icon
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path "src-tauri/icons"
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path "src-tauri/icons"
 
           magick convert `
             "src-tauri/icons/koosreplay.svg" `
@@ -49,11 +53,54 @@ jobs:
             "src-tauri/icons/icon.ico"
 
           if (!(Test-Path "src-tauri/icons/icon.ico")) {
-            Write-Error "icon.ico was not generated."
-            exit 1
+            throw "icon.ico was not generated."
           }
 
-          Write-Host "KoosReplay icon generated successfully."
+      - name: Download FFmpeg
+        shell: pwsh
+        run: |
+          $url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+
+          $zip = "$env:RUNNER_TEMP\ffmpeg.zip"
+
+          $extract = "$env:RUNNER_TEMP\ffmpeg"
+
+          Invoke-WebRequest `
+            -Uri $url `
+            -OutFile $zip
+
+          Expand-Archive `
+            -Path $zip `
+            -DestinationPath $extract `
+            -Force
+
+          $ffmpeg = Get-ChildItem `
+            -Path $extract `
+            -Filter "ffmpeg.exe" `
+            -Recurse |
+            Select-Object -First 1
+
+          if (-not $ffmpeg) {
+            throw "ffmpeg.exe was not found."
+          }
+
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path "src-tauri/bin"
+
+          Copy-Item `
+            $ffmpeg.FullName `
+            "src-tauri/bin/ffmpeg.exe"
+
+      - name: Verify FFmpeg
+        shell: pwsh
+        run: |
+          if (!(Test-Path "src-tauri/bin/ffmpeg.exe")) {
+            throw "FFmpeg was not copied."
+          }
+
+          & "src-tauri/bin/ffmpeg.exe" -version
 
       - name: Build KoosReplay
         run: npm run tauri build
