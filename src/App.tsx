@@ -1,19 +1,32 @@
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import "./styles.css";
 
-const clips = [
+type Clip = {
+  id: number;
+  game: string;
+  title: string;
+  duration: string;
+  ago: string;
+};
+
+const initialClips: Clip[] = [
   {
+    id: 1,
     game: "Minecraft",
     title: "Insane clutch",
     duration: "00:42",
     ago: "2 min ago",
   },
   {
+    id: 2,
     game: "Vortex",
     title: "Clean play",
     duration: "00:31",
     ago: "18 min ago",
   },
   {
+    id: 3,
     game: "Roblox",
     title: "That was close",
     duration: "00:57",
@@ -22,8 +35,143 @@ const clips = [
 ];
 
 export default function App() {
+  const [capturing, setCapturing] = useState(false);
+  const [clips, setClips] = useState<Clip[]>(initialClips);
+  const [status, setStatus] = useState("Ready");
+  const [replayLength, setReplayLength] = useState(30);
+
+  /*
+   * Start the capture backend.
+   */
+  async function startCapture() {
+    try {
+      setStatus("Starting capture...");
+
+      /*
+       * This will eventually point to:
+       *
+       * %USERPROFILE%\Videos\KoosReplay
+       *
+       * For now we use the Windows environment variable.
+       */
+      const outputDir =
+        "%USERPROFILE%\\Videos\\KoosReplay";
+
+      await invoke<string>("start_capture", {
+        outputDir,
+      });
+
+      setCapturing(true);
+      setStatus("Capturing");
+    } catch (error) {
+      console.error(error);
+
+      setCapturing(false);
+      setStatus("Capture unavailable");
+
+      alert(
+        `KoosReplay could not start capture.\n\n${String(error)}`
+      );
+    }
+  }
+
+  /*
+   * Stop the capture backend.
+   */
+  async function stopCapture() {
+    try {
+      await invoke("stop_capture");
+
+      setCapturing(false);
+      setStatus("Ready");
+    } catch (error) {
+      console.error(error);
+
+      alert(
+        `KoosReplay could not stop capture.\n\n${String(error)}`
+      );
+    }
+  }
+
+  /*
+   * Save replay.
+   *
+   * This is the command we'll connect to the real
+   * rolling replay buffer in the next backend update.
+   */
+  async function saveReplay() {
+    if (!capturing) {
+      await startCapture();
+      return;
+    }
+
+    try {
+      setStatus("Saving replay...");
+
+      /*
+       * The actual save_replay Rust command will be
+       * added when we implement the FFmpeg replay buffer.
+       */
+      await invoke("save_replay", {
+        seconds: replayLength,
+      });
+
+      const newClip: Clip = {
+        id: Date.now(),
+        game: "Current Game",
+        title: "New replay",
+        duration: `00:${String(replayLength).padStart(2, "0")}`,
+        ago: "Just now",
+      };
+
+      setClips((current) => [
+        newClip,
+        ...current,
+      ]);
+
+      setStatus("Replay saved");
+    } catch (error) {
+      console.error(error);
+
+      setStatus("Ready");
+
+      /*
+       * Until the Rust save_replay command exists,
+       * this will show the backend error instead of
+       * silently pretending the clip was saved.
+       */
+      alert(
+        `Replay could not be saved yet.\n\n${String(error)}`
+      );
+    }
+  }
+
+  /*
+   * F9 global keyboard shortcut.
+   *
+   * This currently works while the KoosReplay window
+   * has focus. We'll move this to a real Windows
+   * global hotkey later.
+   */
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "F9") {
+        event.preventDefault();
+        void saveReplay();
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  });
+
   return (
     <div className="app">
+      {/* SIDEBAR */}
+
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-icon">K</div>
@@ -48,95 +196,256 @@ export default function App() {
         </nav>
 
         <div className="capture-status">
-          <div className="status-dot" />
+          <div
+            className="status-dot"
+            style={{
+              background: capturing
+                ? "#65d992"
+                : "#777780",
+              boxShadow: capturing
+                ? "0 0 12px #65d992"
+                : "none",
+            }}
+          />
 
           <div>
-            <strong>Smart Capture</strong>
-            <small>Ready</small>
+            <strong>
+              Smart Capture
+            </strong>
+
+            <small>
+              {status}
+            </small>
           </div>
         </div>
       </aside>
 
+      {/* MAIN */}
+
       <main>
         <header>
           <div>
-            <p className="eyebrow">CAPTURE CENTER</p>
+            <p className="eyebrow">
+              CAPTURE CENTER
+            </p>
 
-            <h1>Ready to clip.</h1>
+            <h1>
+              {capturing
+                ? "You're live."
+                : "Ready to clip."}
+            </h1>
 
             <p className="subtitle">
-              KoosReplay is ready to capture your gameplay.
+              {capturing
+                ? "KoosReplay is continuously capturing your gameplay."
+                : "KoosReplay is ready to capture your gameplay."}
             </p>
           </div>
 
-          <button className="settings-button">⚙</button>
+          <button className="settings-button">
+            ⚙
+          </button>
         </header>
+
+        {/* CAPTURE CARD */}
 
         <section className="capture-card">
           <div>
-            <p className="eyebrow">SMART CAPTURE</p>
+            <p className="eyebrow">
+              SMART CAPTURE
+            </p>
 
-            <h2>🚀 High-end profile</h2>
+            <h2>
+              🚀 High-end profile
+            </h2>
 
             <p className="capture-description">
-              1440p · 60 FPS · Best available hardware encoder
+              1440p · 60 FPS · Hardware encoding
             </p>
 
             <div className="chips">
-              <span>Hardware encoding</span>
-              <span>Adaptive Capture ON</span>
+              <span>
+                Hardware encoding
+              </span>
+
+              <span>
+                Adaptive Capture ON
+              </span>
             </div>
           </div>
 
-          <button className="replay-button">
-            <strong>F9</strong>
-            <span>Save Replay</span>
-            <small>Last 30 seconds</small>
-          </button>
+          <div>
+            <button
+              className="replay-button"
+              onClick={() => void saveReplay()}
+            >
+              <strong>
+                F9
+              </strong>
+
+              <span>
+                {capturing
+                  ? "Save Replay"
+                  : "Start Capture"}
+              </span>
+
+              <small>
+                Last {replayLength} seconds
+              </small>
+            </button>
+
+            {capturing && (
+              <button
+                onClick={() => void stopCapture()}
+                style={{
+                  width: "100%",
+                  marginTop: "8px",
+                  padding: "8px",
+                  borderRadius: "9px",
+                  background: "#17171b",
+                  color: "#9999a2",
+                }}
+              >
+                Stop capture
+              </button>
+            )}
+          </div>
         </section>
+
+        {/* REPLAY LENGTH */}
+
+        <section
+          style={{
+            marginTop: "22px",
+            padding: "20px",
+            border: "1px solid #1d1d21",
+            borderRadius: "16px",
+            background: "#0f0f12",
+          }}
+        >
+          <div className="section-header">
+            <h2>
+              Replay length
+            </h2>
+
+            <strong>
+              {replayLength}s
+            </strong>
+          </div>
+
+          <div
+            style={{
+              display: "flex",
+              gap: "8px",
+            }}
+          >
+            {[30, 60, 120].map(
+              (seconds) => (
+                <button
+                  key={seconds}
+                  onClick={() =>
+                    setReplayLength(seconds)
+                  }
+                  style={{
+                    padding: "9px 15px",
+                    borderRadius: "9px",
+                    background:
+                      replayLength === seconds
+                        ? "#f4f4f5"
+                        : "#18181c",
+                    color:
+                      replayLength === seconds
+                        ? "#09090b"
+                        : "#9999a2",
+                  }}
+                >
+                  {seconds}s
+                </button>
+              )
+            )}
+          </div>
+        </section>
+
+        {/* RECENT CLIPS */}
 
         <section className="clips-section">
           <div className="section-header">
-            <h2>Recent clips</h2>
+            <h2>
+              Recent clips
+            </h2>
 
-            <button>View all →</button>
+            <button>
+              View all →
+            </button>
           </div>
 
           <div className="clips">
             {clips.map((clip) => (
-              <article className="clip" key={clip.title}>
+              <article
+                className="clip"
+                key={clip.id}
+              >
                 <div className="thumbnail">
-                  <span>▶</span>
-                  <small>{clip.duration}</small>
+                  <span>
+                    ▶
+                  </span>
+
+                  <small>
+                    {clip.duration}
+                  </small>
                 </div>
 
                 <div className="clip-info">
-                  <strong>{clip.title}</strong>
-                  <span>{clip.game}</span>
-                  <small>{clip.ago}</small>
+                  <strong>
+                    {clip.title}
+                  </strong>
+
+                  <span>
+                    {clip.game}
+                  </span>
+
+                  <small>
+                    {clip.ago}
+                  </small>
                 </div>
 
-                <button className="more-button">•••</button>
+                <button className="more-button">
+                  •••
+                </button>
               </article>
             ))}
           </div>
         </section>
 
+        {/* PERFORMANCE */}
+
         <section className="performance-card">
           <div>
-            <p className="eyebrow">SYSTEM</p>
+            <p className="eyebrow">
+              SYSTEM
+            </p>
 
-            <h2>Performance protected</h2>
+            <h2>
+              Performance protected
+            </h2>
 
             <p>
-              Adaptive Capture will automatically reduce recording load if
-              your game needs additional resources.
+              Adaptive Capture will automatically
+              reduce recording load if your game
+              needs additional resources.
             </p>
           </div>
 
           <div className="performance-status">
-            <strong>LOW</strong>
-            <span>Recorder load</span>
+            <strong>
+              {capturing
+                ? "ACTIVE"
+                : "LOW"}
+            </strong>
+
+            <span>
+              Recorder load
+            </span>
           </div>
         </section>
       </main>
