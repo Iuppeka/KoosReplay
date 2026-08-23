@@ -8,16 +8,19 @@ pub fn run() {
     tauri::Builder::default()
         .manage(CaptureState {
             process: Mutex::new(None),
+            buffer_dir: Mutex::new(None),
         })
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .build()
+                .build(),
         )
-        .invoke_handler(tauri::generate_handler![
-            capture::start_capture,
-            capture::stop_capture,
-            capture::save_replay
-        ])
+        .invoke_handler(
+            tauri::generate_handler![
+                capture::start_capture,
+                capture::stop_capture,
+                capture::save_replay
+            ],
+        )
         .run(tauri::generate_context!())
         .expect("error while running KoosReplay");
 }
