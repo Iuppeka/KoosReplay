@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   register,
@@ -17,7 +17,8 @@ type Clip = {
   created: string;
 };
 
-const REPLAY_DIR = "Videos\\KoosReplay";
+const DEFAULT_REPLAY_LENGTH = 30;
+const DEFAULT_HOTKEY = "F9";
 
 export default function App() {
   const [page, setPage] = useState<Page>("home");
@@ -29,28 +30,105 @@ export default function App() {
     useState(false);
 
   const [replayLength, setReplayLength] =
-    useState(30);
+    useState(DEFAULT_REPLAY_LENGTH);
 
   const [hotkey, setHotkey] =
-    useState("F9");
+    useState(DEFAULT_HOTKEY);
 
   const [quality, setQuality] =
     useState("Auto");
 
   const [status, setStatus] =
-    useState("Ready");
+    useState("Starting...");
 
   const [clips, setClips] =
     useState<Clip[]>([]);
 
+  /*
+   * Prevent the hotkey callback from using
+   * stale React state.
+   */
+  const capturingRef =
+    useRef(capturing);
+
+  const savingRef =
+    useRef(saving);
+
+  const replayLengthRef =
+    useRef(replayLength);
+
+  useEffect(() => {
+    capturingRef.current =
+      capturing;
+  }, [capturing]);
+
+  useEffect(() => {
+    savingRef.current =
+      saving;
+  }, [saving]);
+
+  useEffect(() => {
+    replayLengthRef.current =
+      replayLength;
+  }, [replayLength]);
+
+  /*
+   * Automatically start the rolling recorder
+   * when KoosReplay launches.
+   */
+  useEffect(() => {
+    let mounted = true;
+
+    async function beginCapture() {
+      try {
+        await invoke(
+          "start_capture",
+          {
+            outputDir:
+              "Videos\\KoosReplay",
+          }
+        );
+
+        if (mounted) {
+          setCapturing(true);
+          setStatus("Capturing");
+        }
+      } catch (error) {
+        console.error(
+          "Automatic capture failed:",
+          error
+        );
+
+        if (mounted) {
+          setCapturing(false);
+          setStatus(
+            "Capture unavailable"
+          );
+        }
+      }
+    }
+
+    void beginCapture();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  /*
+   * Start the recorder manually if needed.
+   */
   async function startCapture() {
     try {
-      setStatus("Starting capture...");
+      setStatus(
+        "Starting capture..."
+      );
 
       await invoke(
         "start_capture",
         {
-          outputDir: REPLAY_DIR,
+          outputDir:
+            "Videos\\KoosReplay",
         }
       );
 
@@ -59,124 +137,219 @@ export default function App() {
     } catch (error) {
       console.error(error);
 
-      setStatus("Capture failed");
+      setStatus(
+        "Capture failed"
+      );
 
       alert(
-        `Could not start KoosReplay.\n\n${String(error)}`
+        `Could not start KoosReplay.\n\n${String(
+          error
+        )}`
       );
     }
   }
 
+  /*
+   * Stop the rolling recorder.
+   */
   async function stopCapture() {
     try {
-      await invoke("stop_capture");
+      await invoke(
+        "stop_capture"
+      );
 
       setCapturing(false);
-      setStatus("Ready");
+      setStatus("Stopped");
     } catch (error) {
       console.error(error);
 
       alert(
-        `Could not stop capture.\n\n${String(error)}`
+        `Could not stop capture.\n\n${String(
+          error
+        )}`
       );
     }
   }
 
+  /*
+   * Save the previous X seconds.
+   *
+   * IMPORTANT:
+   * This does NOT stop the recorder.
+   *
+   * F9 -> save replay
+   *       ↓
+   * recorder continues
+   */
   async function saveReplay() {
-    if (!capturing) {
+    if (!capturingRef.current) {
+      /*
+       * If capture somehow stopped,
+       * restart it automatically.
+       */
       await startCapture();
       return;
     }
 
-    if (saving) {
+    if (savingRef.current) {
       return;
     }
 
     try {
       setSaving(true);
-      setStatus("Saving replay...");
+      savingRef.current = true;
+
+      setStatus(
+        "Saving replay..."
+      );
 
       const path =
         await invoke<string>(
           "save_replay",
           {
-            seconds: replayLength,
+            seconds:
+              replayLengthRef.current,
           }
         );
 
       const clip: Clip = {
         id: Date.now(),
-        title: "New Replay",
-        duration: replayLength,
+
+        title:
+          "KoosReplay " +
+          new Date().toLocaleTimeString(),
+
+        duration:
+          replayLengthRef.current,
+
         path,
-        created: "Just now",
+
+        created:
+          "Just now",
       };
 
-      setClips((current) => [
-        clip,
-        ...current,
-      ]);
+      setClips(
+        (current) => [
+          clip,
+          ...current,
+        ]
+      );
 
-      setStatus("Replay saved");
+      setStatus(
+        "Replay saved"
+      );
+
+      /*
+       * Return to capturing state
+       * immediately after saving.
+       */
+      setTimeout(() => {
+        if (
+          capturingRef.current
+        ) {
+          setStatus(
+            "Capturing"
+          );
+        }
+      }, 1500);
     } catch (error) {
-      console.error(error);
+      console.error(
+        "Replay save failed:",
+        error
+      );
 
-      setStatus("Capturing");
+      setStatus(
+        "Capture error"
+      );
 
       alert(
-        `Could not save replay.\n\n${String(error)}`
+        `Could not save replay.\n\n${String(
+          error
+        )}`
       );
     } finally {
       setSaving(false);
+      savingRef.current = false;
     }
   }
 
+  /*
+   * Register F9.
+   *
+   * This effect is intentionally separate
+   * from the automatic capture effect.
+   */
   useEffect(() => {
-    let alive = true;
+    let active = true;
 
     async function setupHotkey() {
       try {
+        /*
+         * Remove an old registration first.
+         */
+        try {
+          await unregister(
+            hotkey
+          );
+        } catch {
+          // Nothing to unregister.
+        }
+
         await register(
           hotkey,
           (event) => {
             if (
-              alive &&
-              event.state === "Pressed"
+              !active ||
+              event.state !==
+                "Pressed"
             ) {
-              void saveReplay();
+              return;
             }
+
+            void saveReplay();
           }
+        );
+
+        console.log(
+          `KoosReplay hotkey registered: ${hotkey}`
         );
       } catch (error) {
         console.error(
-          "Hotkey registration failed:",
+          "Could not register hotkey:",
           error
         );
+
+        if (active) {
+          setStatus(
+            "Hotkey unavailable"
+          );
+        }
       }
     }
 
     void setupHotkey();
 
     return () => {
-      alive = false;
+      active = false;
 
       void unregister(
         hotkey
       ).catch(() => {});
     };
-  }, [
-    hotkey,
-    capturing,
-    replayLength,
-    saving,
-  ]);
+  }, [hotkey]);
 
+  /*
+   * UI
+   */
   return (
     <div className="app">
+
+      {/* SIDEBAR */}
 
       <aside className="sidebar">
 
         <div className="brand">
+
           <div className="brand-icon">
             K
           </div>
@@ -184,6 +357,7 @@ export default function App() {
           <span>
             KoosReplay
           </span>
+
         </div>
 
         <nav>
@@ -250,6 +424,7 @@ export default function App() {
           />
 
           <div>
+
             <strong>
               Smart Capture
             </strong>
@@ -257,19 +432,25 @@ export default function App() {
             <small>
               {status}
             </small>
+
           </div>
 
         </div>
 
       </aside>
 
+      {/* MAIN */}
+
       <main>
+
+        {/* HOME */}
 
         {page === "home" && (
           <>
             <header>
 
               <div>
+
                 <p className="eyebrow">
                   CAPTURE CENTER
                 </p>
@@ -285,18 +466,23 @@ export default function App() {
                     ? "KoosReplay is continuously capturing your desktop."
                     : "Start capture and save your last moments with F9."}
                 </p>
+
               </div>
 
               <button
                 className="settings-button"
                 onClick={() =>
-                  setPage("settings")
+                  setPage(
+                    "settings"
+                  )
                 }
               >
                 ⚙
               </button>
 
             </header>
+
+            {/* CAPTURE CARD */}
 
             <section className="capture-card">
 
@@ -311,10 +497,11 @@ export default function App() {
                 </h2>
 
                 <p className="capture-description">
-                  60 FPS · Adaptive capture
+                  60 FPS · Rolling replay buffer
                 </p>
 
                 <div className="chips">
+
                   <span>
                     Hardware encoding
                   </span>
@@ -322,6 +509,7 @@ export default function App() {
                   <span>
                     Adaptive Capture
                   </span>
+
                 </div>
 
               </div>
@@ -331,13 +519,16 @@ export default function App() {
                 <button
                   className="replay-button"
                   onClick={() => {
-                    if (capturing) {
+                    if (
+                      capturing
+                    ) {
                       void stopCapture();
                     } else {
                       void startCapture();
                     }
                   }}
                 >
+
                   <strong>
                     {hotkey}
                   </strong>
@@ -349,17 +540,22 @@ export default function App() {
                   </span>
 
                   <small>
-                    Last {replayLength}s
+                    Last{" "}
+                    {replayLength}s
                   </small>
+
                 </button>
 
               </div>
 
             </section>
 
+            {/* REPLAY LENGTH */}
+
             <section className="settings-preview">
 
               <div className="section-header">
+
                 <h2>
                   Replay length
                 </h2>
@@ -367,6 +563,7 @@ export default function App() {
                 <strong>
                   {replayLength}s
                 </strong>
+
               </div>
 
               <div className="option-row">
@@ -396,6 +593,8 @@ export default function App() {
 
             </section>
 
+            {/* RECENT CLIPS */}
+
             <section className="clips-section">
 
               <div className="section-header">
@@ -414,8 +613,10 @@ export default function App() {
 
               </div>
 
-              {clips.length === 0 ? (
+              {clips.length ===
+              0 ? (
                 <div className="empty-state">
+
                   <div className="empty-icon">
                     ▶
                   </div>
@@ -425,45 +626,64 @@ export default function App() {
                   </h2>
 
                   <p>
-                    Start capturing and
-                    press {hotkey} to save
-                    your first replay.
+                    KoosReplay is
+                    recording in the
+                    background.
+                    Press{" "}
+                    {hotkey} when
+                    something awesome
+                    happens.
                   </p>
+
                 </div>
               ) : (
                 <div className="clips">
 
-                  {clips.map((clip) => (
-                    <article
-                      className="clip"
-                      key={clip.id}
-                    >
-                      <div className="thumbnail">
-                        <span>
-                          ▶
-                        </span>
+                  {clips.map(
+                    (clip) => (
+                      <article
+                        className="clip"
+                        key={clip.id}
+                      >
 
-                        <small>
-                          {clip.duration}s
-                        </small>
-                      </div>
+                        <div className="thumbnail">
 
-                      <div className="clip-info">
-                        <strong>
-                          {clip.title}
-                        </strong>
+                          <span>
+                            ▶
+                          </span>
 
-                        <span>
-                          Desktop Capture
-                        </span>
+                          <small>
+                            {
+                              clip.duration
+                            }
+                            s
+                          </small>
 
-                        <small>
-                          {clip.created}
-                        </small>
-                      </div>
+                        </div>
 
-                    </article>
-                  ))}
+                        <div className="clip-info">
+
+                          <strong>
+                            {
+                              clip.title
+                            }
+                          </strong>
+
+                          <span>
+                            Desktop Capture
+                          </span>
+
+                          <small>
+                            {
+                              clip.created
+                            }
+                          </small>
+
+                        </div>
+
+                      </article>
+                    )
+                  )}
 
                 </div>
               )}
@@ -472,10 +692,14 @@ export default function App() {
           </>
         )}
 
+        {/* CLIPS */}
+
         {page === "clips" && (
           <>
             <header>
+
               <div>
+
                 <p className="eyebrow">
                   LIBRARY
                 </p>
@@ -488,11 +712,15 @@ export default function App() {
                   Your saved KoosReplay
                   moments.
                 </p>
+
               </div>
+
             </header>
 
-            {clips.length === 0 ? (
+            {clips.length ===
+            0 ? (
               <div className="empty-state">
+
                 <div className="empty-icon">
                   ▶
                 </div>
@@ -502,53 +730,75 @@ export default function App() {
                 </h2>
 
                 <p>
-                  Saved replays will
-                  appear here.
+                  KoosReplay hasn't
+                  saved a replay yet.
                 </p>
+
               </div>
             ) : (
               <div className="clips">
 
-                {clips.map((clip) => (
-                  <article
-                    className="clip"
-                    key={clip.id}
-                  >
-                    <div className="thumbnail">
-                      <span>
-                        ▶
-                      </span>
+                {clips.map(
+                  (clip) => (
+                    <article
+                      className="clip"
+                      key={clip.id}
+                    >
 
-                      <small>
-                        {clip.duration}s
-                      </small>
-                    </div>
+                      <div className="thumbnail">
 
-                    <div className="clip-info">
-                      <strong>
-                        {clip.title}
-                      </strong>
+                        <span>
+                          ▶
+                        </span>
 
-                      <span>
-                        {clip.path}
-                      </span>
+                        <small>
+                          {
+                            clip.duration
+                          }
+                          s
+                        </small>
 
-                      <small>
-                        {clip.created}
-                      </small>
-                    </div>
-                  </article>
-                ))}
+                      </div>
+
+                      <div className="clip-info">
+
+                        <strong>
+                          {
+                            clip.title
+                          }
+                        </strong>
+
+                        <span>
+                          {
+                            clip.path
+                          }
+                        </span>
+
+                        <small>
+                          {
+                            clip.created
+                          }
+                        </small>
+
+                      </div>
+
+                    </article>
+                  )
+                )}
 
               </div>
             )}
           </>
         )}
 
+        {/* SETTINGS */}
+
         {page === "settings" && (
           <>
             <header>
+
               <div>
+
                 <p className="eyebrow">
                   CONFIGURATION
                 </p>
@@ -560,22 +810,29 @@ export default function App() {
                 <p className="subtitle">
                   Configure KoosReplay.
                 </p>
+
               </div>
+
             </header>
 
             <div className="settings-panel">
 
+              {/* REPLAY LENGTH */}
+
               <div className="setting">
 
                 <div>
+
                   <strong>
                     Replay length
                   </strong>
 
                   <p>
-                    How much footage is
-                    saved when you clip.
+                    How much footage
+                    is saved when
+                    you press F9.
                   </p>
+
                 </div>
 
                 <select
@@ -583,11 +840,13 @@ export default function App() {
                   onChange={(event) =>
                     setReplayLength(
                       Number(
-                        event.target.value
+                        event.target
+                          .value
                       )
                     )
                   }
                 >
+
                   <option value="30">
                     30 seconds
                   </option>
@@ -599,55 +858,72 @@ export default function App() {
                   <option value="120">
                     120 seconds
                   </option>
+
                 </select>
 
               </div>
 
+              {/* HOTKEY */}
+
               <div className="setting">
 
                 <div>
+
                   <strong>
                     Clip hotkey
                   </strong>
 
                   <p>
-                    Keyboard shortcut used
-                    to save a replay.
+                    Press this key
+                    to save your
+                    last replay.
                   </p>
+
                 </div>
 
                 <input
                   value={hotkey}
                   onChange={(event) =>
                     setHotkey(
-                      event.target.value
+                      event.target
+                        .value
+                        .toUpperCase()
                     )
                   }
+                  placeholder="F9"
                 />
 
               </div>
 
+              {/* PERFORMANCE */}
+
               <div className="setting">
 
                 <div>
+
                   <strong>
                     Performance profile
                   </strong>
 
                   <p>
-                    Choose how aggressively
-                    KoosReplay uses your PC.
+                    Choose how
+                    aggressively
+                    KoosReplay uses
+                    your PC.
                   </p>
+
                 </div>
 
                 <select
                   value={quality}
                   onChange={(event) =>
                     setQuality(
-                      event.target.value
+                      event.target
+                        .value
                     )
                   }
                 >
+
                   <option>
                     Auto
                   </option>
@@ -667,24 +943,35 @@ export default function App() {
                   <option>
                     Ultra
                   </option>
+
                 </select>
 
               </div>
 
+              {/* SAVE LOCATION */}
+
               <div className="setting">
 
                 <div>
+
                   <strong>
                     Save location
                   </strong>
 
                   <p>
-                    Default:
                     Videos\KoosReplay
                   </p>
+
                 </div>
 
-                <button className="option">
+                <button
+                  className="option"
+                  onClick={() => {
+                    alert(
+                      "Custom save locations will be added in the next version."
+                    );
+                  }}
+                >
                   Change
                 </button>
 
