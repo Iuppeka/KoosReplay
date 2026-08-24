@@ -4,8 +4,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-const SEGMENT_SECONDS: u64 = 2;
-const BUFFER_SECONDS: u64 = 40;
+pub const SEGMENT_SECONDS: u64 = 2;
+pub const BUFFER_SECONDS: u64 = 40;
 
 pub fn prepare_buffer(dir: &Path) -> Result<(), String> {
     fs::create_dir_all(dir)
@@ -31,8 +31,7 @@ pub fn segment_pattern(dir: &Path) -> PathBuf {
 pub fn required_segments(seconds: u64) -> usize {
     let seconds = seconds.clamp(1, 120);
 
-    ((seconds + SEGMENT_SECONDS - 1)
-        / SEGMENT_SECONDS) as usize
+    ((seconds + SEGMENT_SECONDS - 1) / SEGMENT_SECONDS) as usize
 }
 
 pub fn max_segments() -> usize {
