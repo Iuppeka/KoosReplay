@@ -1,7 +1,7 @@
 use std::{
     fs,
     path::PathBuf,
-    process::{Child, Command},
+    process::{Child, Command, Stdio},
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -31,7 +31,9 @@ fn ffmpeg_path(app: &AppHandle) -> Result<PathBuf, String> {
         })?;
 
     let path =
-        resource_dir.join("bin").join("ffmpeg.exe");
+        resource_dir
+            .join("bin")
+            .join("ffmpeg.exe");
 
     if !path.exists() {
         return Err(format!(
@@ -43,57 +45,44 @@ fn ffmpeg_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-/*
- * Resolve Videos\KoosReplay properly.
- *
- * If the frontend gives us:
- *
- *     Videos\KoosReplay
- *
- * we turn it into the user's real Windows Videos folder.
- */
-fn resolve_output_dir(
+fn output_directory(
     app: &AppHandle,
     requested: &str,
 ) -> Result<PathBuf, String> {
-    let requested_path =
+    let requested =
         PathBuf::from(requested);
 
-    if requested_path.is_absolute() {
-        return Ok(requested_path);
+    if requested.is_absolute() {
+        return Ok(requested);
     }
 
-    let video_dir = app
-        .path()
-        .video_dir()
-        .map_err(|e| {
-            format!(
-                "Could not locate Windows Videos folder: {e}"
-            )
-        })?;
+    let videos =
+        app.path()
+            .video_dir()
+            .map_err(|e| {
+                format!(
+                    "Could not locate Videos folder: {e}"
+                )
+            })?;
 
-    /*
-     * The frontend uses Videos\KoosReplay.
-     * We only want the KoosReplay part here.
-     */
-    let relative = requested_path
-        .strip_prefix("Videos")
-        .unwrap_or(&requested_path);
+    let relative =
+        requested
+            .strip_prefix("Videos")
+            .unwrap_or(&requested);
 
-    Ok(video_dir.join(relative))
+    Ok(videos.join(relative))
 }
 
 /*
- * Start the permanent rolling capture.
+ * Starts continuous capture.
  *
- * FFmpeg continuously creates approximately
- * 2-second MP4 segments.
+ * IMPORTANT:
  *
- * We keep 70 segments:
+ * We use the Windows TEMP directory for the
+ * rolling chunks rather than Videos\KoosReplay.
  *
- * 70 × 2 seconds ≈ 140 seconds
- *
- * This gives us enough room for a 120-second replay.
+ * Only the final replay is copied to the user's
+ * Videos folder.
  */
 #[tauri::command]
 pub fn start_capture(
@@ -101,100 +90,102 @@ pub fn start_capture(
     state: State<'_, CaptureState>,
     output_dir: String,
 ) -> Result<String, String> {
-    let mut process = state
-        .process
-        .lock()
-        .map_err(|_| {
-            "Could not lock capture state.".to_string()
-        })?;
+    let mut process =
+        state
+            .process
+            .lock()
+            .map_err(|_| {
+                "Could not lock capture state."
+                    .to_string()
+            })?;
 
-    /*
-     * Already recording.
-     */
     if process.is_some() {
         return Ok(
-            "Capture is already running.".to_string()
+            "Capture is already running."
+                .to_string()
         );
     }
 
     let output =
-        resolve_output_dir(
+        output_directory(
             &app,
             &output_dir,
         )?;
 
-    fs::create_dir_all(&output)
-        .map_err(|e| {
-            format!(
-                "Could not create output directory:\n{e}"
-            )
-        })?;
-
-    let buffer_dir =
-        output.join(".buffer");
-
-    fs::create_dir_all(&buffer_dir)
-        .map_err(|e| {
-            format!(
-                "Could not create replay buffer:\n{e}"
-            )
-        })?;
+    fs::create_dir_all(
+        &output
+    )
+    .map_err(|e| {
+        format!(
+            "Could not create output directory:\n{e}"
+        )
+    })?;
 
     /*
-     * Delete old buffer files.
+     * Use the Windows TEMP directory for
+     * the rolling chunks.
+     */
+    let temp =
+        std::env::temp_dir();
+
+    let buffer =
+        temp.join("KoosReplay");
+
+    fs::create_dir_all(
+        &buffer
+    )
+    .map_err(|e| {
+        format!(
+            "Could not create RAM buffer directory:\n{e}"
+        )
+    })?;
+
+    /*
+     * Clean old chunks.
      */
     if let Ok(entries) =
-        fs::read_dir(&buffer_dir)
+        fs::read_dir(&buffer)
     {
         for entry in entries.flatten() {
-            let path = entry.path();
-
-            if path.is_file() {
-                let _ =
-                    fs::remove_file(path);
-            }
+            let _ =
+                fs::remove_file(
+                    entry.path()
+                );
         }
     }
 
     let ffmpeg =
         ffmpeg_path(&app)?;
 
-    let segment_pattern =
-        buffer_dir.join(
-            "segment_%05d.mp4"
+    let pattern =
+        buffer.join(
+            "buffer_%05d.mp4"
         );
 
-    let segment_pattern_string =
-        segment_pattern
+    let pattern =
+        pattern
             .to_string_lossy()
             .to_string();
 
     /*
-     * IMPORTANT:
-     *
-     * We explicitly specify:
+     * FFmpeg desktop capture.
      *
      * 60 FPS
      * H.264
-     * 1080p-ish desktop capture
-     * 2-second segments
-     *
-     * The segment muxer continuously records.
+     * 2-second chunks
+     * 70 chunks maximum
      */
     let child =
-        Command::new(&ffmpeg)
+        Command::new(ffmpeg)
             .args([
                 "-hide_banner",
 
-                /*
-                 * Keep FFmpeg quiet unless
-                 * something is actually wrong.
-                 */
                 "-loglevel",
                 "warning",
 
                 /*
-                 * Windows desktop capture.
+                 * Tell FFmpeg exactly what
+                 * input we're giving it.
                  */
                 "-f",
                 "gdigrab",
@@ -209,11 +200,7 @@ pub fn start_capture(
                 "desktop",
 
                 /*
-                 * Software H.264 for our first
-                 * working version.
-                 *
-                 * We'll replace this with
-                 * AMD hardware encoding later.
+                 * First compatibility encoder.
                  */
                 "-c:v",
                 "libx264",
@@ -228,9 +215,7 @@ pub fn start_capture(
                 "yuv420p",
 
                 /*
-                 * Keyframe every second.
-                 * This makes replay segments
-                 * easier to join.
+                 * One keyframe per second.
                  */
                 "-g",
                 "60",
@@ -239,7 +224,7 @@ pub fn start_capture(
                 "60",
 
                 /*
-                 * Rolling 2-second MP4 segments.
+                 * Rolling chunks.
                  */
                 "-f",
                 "segment",
@@ -251,7 +236,8 @@ pub fn start_capture(
                 "1",
 
                 /*
-                 * Keep roughly 140 seconds.
+                 * 70 × 2 sec = approximately
+                 * 140 seconds.
                  */
                 "-segment_wrap",
                 "70",
@@ -259,8 +245,14 @@ pub fn start_capture(
                 "-segment_format",
                 "mp4",
 
-                &segment_pattern_string,
+                &pattern,
             ])
+            /*
+             * Don't create a console window.
+             */
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| {
                 format!(
@@ -268,11 +260,12 @@ pub fn start_capture(
                 )
             })?;
 
-    *process = Some(child);
+    *process =
+        Some(child);
 
     drop(process);
 
-    let mut buffer =
+    let mut state_buffer =
         state
             .buffer_dir
             .lock()
@@ -281,17 +274,17 @@ pub fn start_capture(
                     .to_string()
             })?;
 
-    *buffer =
-        Some(buffer_dir);
+    *state_buffer =
+        Some(buffer);
 
     Ok(
-        "KoosReplay is now recording continuously."
+        "RAM replay buffer started."
             .to_string()
     )
 }
 
 /*
- * Stop the background recorder.
+ * Stop continuous capture.
  */
 #[tauri::command]
 pub fn stop_capture(
@@ -309,9 +302,6 @@ pub fn stop_capture(
     if let Some(mut child) =
         process.take()
     {
-        /*
-         * Terminate FFmpeg.
-         */
         let _ =
             child.kill();
 
@@ -323,17 +313,7 @@ pub fn stop_capture(
 }
 
 /*
- * Save the latest N seconds.
- *
- * Example:
- *
- *     save_replay(30)
- *
- * means:
- *
- *     take the latest ~30 seconds
- *     from the rolling buffer
- *     and create one MP4.
+ * Save the latest replay.
  */
 #[tauri::command]
 pub fn save_replay(
@@ -355,9 +335,6 @@ pub fn save_replay(
         );
     }
 
-    /*
-     * Get the buffer directory.
-     */
     let buffer =
         state
             .buffer_dir
@@ -368,32 +345,29 @@ pub fn save_replay(
             })?
             .clone()
             .ok_or_else(|| {
-                "KoosReplay is not recording yet."
+                "KoosReplay is not recording."
                     .to_string()
             })?;
 
-    let output_dir =
-        buffer
-            .parent()
-            .ok_or_else(|| {
-                "Invalid replay buffer directory."
-                    .to_string()
-            })?
-            .to_path_buf();
+    let output =
+        output_directory(
+            &app,
+            "Videos\\KoosReplay"
+        )?;
 
     fs::create_dir_all(
-        &output_dir
+        &output
     )
     .map_err(|e| {
         format!(
-            "Could not create output directory:\n{e}"
+            "Could not create Videos\\KoosReplay:\n{e}"
         )
     })?;
 
     /*
-     * Read all MP4 segments.
+     * Find completed MP4 chunks.
      */
-    let mut segments: Vec<PathBuf> =
+    let mut segments =
         fs::read_dir(&buffer)
             .map_err(|e| {
                 format!(
@@ -407,92 +381,93 @@ pub fn save_replay(
                     .and_then(|x| x.to_str())
                     == Some("mp4")
             })
-            .collect();
+            .collect::<Vec<_>>();
 
     if segments.is_empty() {
         return Err(
-            "The replay buffer is still empty. \
-             Wait a few seconds and try F9 again."
+            "Replay buffer is still warming up. \
+             Wait a few seconds and press F9 again."
                 .to_string()
         );
     }
 
     /*
-     * Sort by modification time rather than filename.
-     *
-     * This is VERY important because FFmpeg wraps
-     * segment_00000, segment_00001, etc.
+     * Newest files first by modification time.
      */
     segments.sort_by_key(|path| {
         fs::metadata(path)
-            .and_then(|metadata| {
-                metadata.modified()
+            .and_then(|m| {
+                m.modified()
             })
             .unwrap_or(
-                SystemTime::UNIX_EPOCH
+                UNIX_EPOCH
+                    .into()
             )
     });
 
     /*
-     * The newest segment is usually still being
-     * written by FFmpeg.
+     * The newest segment may still be
+     * receiving data.
      *
-     * Never include it.
+     * Don't touch it.
      */
     if segments.len() > 1 {
         segments.pop();
     }
 
-    if segments.is_empty() {
-        return Err(
-            "The recorder has not completed \
-             its first segment yet."
-                .to_string()
-        );
-    }
-
     /*
-     * Each segment is approximately 2 seconds.
+     * We need approximately:
      *
-     * Add one extra segment so the requested
-     * duration is not accidentally too short.
+     * seconds / 2
+     *
+     * chunks.
      */
-    let needed_segments =
-        ((seconds + 1) / 2 + 1)
+    let wanted =
+        ((seconds + 1) / 2)
             as usize;
 
     let start =
         segments
             .len()
             .saturating_sub(
-                needed_segments
+                wanted
             );
 
     let selected =
         &segments[start..];
 
+    if selected.is_empty() {
+        return Err(
+            "Not enough completed replay footage yet."
+                .to_string()
+        );
+    }
+
     /*
-     * Create FFmpeg concat file.
+     * Build concat file.
      */
-    let concat_file =
+    let concat =
         buffer.join(
-            "replay_concat.txt"
+            "save_concat.txt"
         );
 
-    let mut concat =
+    let mut text =
         String::new();
 
     for segment in selected {
         let path =
             segment
                 .to_string_lossy()
-                .replace('\\', "/")
+                .replace(
+                    '\\',
+                    "/"
+                )
                 .replace(
                     '\'',
                     "'\\''"
                 );
 
-        concat.push_str(
+        text.push_str(
             &format!(
                 "file '{}'\n",
                 path
@@ -501,8 +476,8 @@ pub fn save_replay(
     }
 
     fs::write(
-        &concat_file,
-        concat,
+        &concat,
+        text,
     )
     .map_err(|e| {
         format!(
@@ -517,32 +492,33 @@ pub fn save_replay(
         );
 
     let output =
-        output_dir.join(
+        output.join(
             filename
         );
 
     let ffmpeg =
         ffmpeg_path(&app)?;
 
-    let concat_path =
-        concat_file
+    let concat =
+        concat
             .to_string_lossy()
             .to_string();
 
-    let output_path =
+    let output =
         output
             .to_string_lossy()
             .to_string();
 
     /*
-     * Join the segments without re-encoding.
+     * Join without re-encoding.
      *
-     * This makes F9 extremely fast.
+     * This makes F9 very fast.
      */
     let result =
-        Command::new(&ffmpeg)
+        Command::new(ffmpeg)
             .args([
                 "-hide_banner",
+
                 "-loglevel",
                 "warning",
 
@@ -553,7 +529,7 @@ pub fn save_replay(
                 "0",
 
                 "-i",
-                &concat_path,
+                &concat,
 
                 "-c",
                 "copy",
@@ -561,18 +537,18 @@ pub fn save_replay(
                 "-movflags",
                 "+faststart",
 
-                &output_path,
+                &output,
             ])
             .output()
             .map_err(|e| {
                 format!(
-                    "Could not run FFmpeg:\n{e}"
+                    "Could not save replay:\n{e}"
                 )
             })?;
 
     let _ =
         fs::remove_file(
-            &concat_file
+            &concat
         );
 
     if !result.status.success() {
@@ -588,31 +564,23 @@ pub fn save_replay(
     }
 
     /*
-     * Verify that the file actually exists
-     * and isn't empty.
+     * Make absolutely sure that the
+     * output actually exists.
      */
     let metadata =
         fs::metadata(&output)
             .map_err(|e| {
                 format!(
-                    "Replay was supposedly saved, \
-                     but the MP4 could not be found:\n{e}"
+                    "Replay wasn't created:\n{e}"
                 )
             })?;
 
     if metadata.len() == 0 {
-        let _ =
-            fs::remove_file(&output);
-
         return Err(
-            "FFmpeg created an empty replay file."
+            "FFmpeg created an empty replay."
                 .to_string()
         );
     }
 
-    Ok(
-        output
-            .to_string_lossy()
-            .to_string()
-    )
+    Ok(output)
 }
